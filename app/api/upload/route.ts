@@ -12,9 +12,18 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
-    if (!file || !file.type.startsWith("image/")) {
+    if (!file) {
       return NextResponse.json(
-        { error: "画像ファイルを選択してください" },
+        { error: "ファイルを選択してください" },
+        { status: 400 }
+      );
+    }
+    const isImage = file.type.startsWith("image/");
+    const isAudio = file.type.startsWith("audio/") || /\.(mp3|wav|ogg|m4a|flac)$/i.test(file.name);
+    const isVideo = file.type.startsWith("video/") || /\.(mp4|webm|mov|avi)$/i.test(file.name);
+    if (!isImage && !isAudio && !isVideo) {
+      return NextResponse.json(
+        { error: "画像・音声・動画ファイルを選択してください" },
         { status: 400 }
       );
     }

@@ -1,3 +1,17 @@
+// 音声入力（audio_url）が必要なモデルか
+export const needsAudioInput = (category?: string, endpointId?: string): boolean => {
+  const c = (category || "").toLowerCase();
+  const e = (endpointId || "").toLowerCase();
+  return c.includes("speech-to-text") || c.includes("audio-to") || e.includes("whisper");
+};
+
+// 動画入力（video_urls）が必要なモデルか
+export const needsVideoInput = (category?: string, endpointId?: string): boolean => {
+  const c = (category || "").toLowerCase();
+  const e = (endpointId || "").toLowerCase();
+  return c.includes("video-to-video") || e.includes("ffmpeg") || e.includes("merge-videos");
+};
+
 // カテゴリを日本語の生成タイプにマッピング
 export const CATEGORY_LABELS: Record<string, string> = {
   "text-to-image": "画像生成",

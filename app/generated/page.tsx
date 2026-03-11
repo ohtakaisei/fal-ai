@@ -52,20 +52,20 @@ export default function GeneratedPage() {
   return (
     <main className="min-h-screen">
       <header className="sticky top-0 z-50 border-b border-white/5 bg-[#0c0c0f]/95 backdrop-blur-md">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="flex h-16 items-center justify-between gap-4">
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight">
+        <div className="mx-auto max-w-7xl px-3 sm:px-6 lg:px-8">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 py-4 sm:py-0 sm:h-16">
+            <div className="min-w-0">
+              <h1 className="text-base sm:text-lg font-semibold tracking-tight truncate">
                 <span className="bg-gradient-to-r from-violet-400 via-fuchsia-400 to-violet-400 bg-clip-text text-transparent">
                   生成ファイル一覧
                 </span>
               </h1>
-              <p className="mt-0.5 text-sm text-zinc-500">
-                {saveDir}/ フォルダに保存された画像・動画・音声
+              <p className="mt-0.5 text-xs sm:text-sm text-zinc-500 truncate">
+                {saveDir}/ フォルダ
               </p>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              <div className="flex items-center gap-2 flex-1 min-w-0 sm:flex-initial">
                 <input
                   type="text"
                   value={saveDir}
@@ -77,7 +77,7 @@ export default function GeneratedPage() {
                     }
                   }}
                   placeholder="generated"
-                  className="w-32 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-200 placeholder-zinc-500 focus:border-violet-500/50 focus:outline-none"
+                  className="w-20 sm:w-32 rounded-lg border border-white/10 bg-white/5 px-2 py-2 sm:px-3 text-xs sm:text-sm text-zinc-200 placeholder-zinc-500 focus:border-violet-500/50 focus:outline-none min-w-0"
                 />
                 <button
                   type="button"
@@ -85,16 +85,16 @@ export default function GeneratedPage() {
                     localStorage.setItem("fal_save_dir", saveDir);
                     loadFiles(saveDir);
                   }}
-                  className="rounded-lg bg-white/10 px-3 py-2 text-sm font-medium text-zinc-300 hover:bg-white/15"
+                  className="rounded-lg bg-white/10 px-2 py-2 sm:px-3 text-xs sm:text-sm font-medium text-zinc-300 hover:bg-white/15 shrink-0"
                 >
                   表示
                 </button>
               </div>
               <Link
                 href="/"
-                className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-zinc-300 transition-colors hover:bg-white/10 hover:text-zinc-200"
+                className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 sm:px-4 text-xs sm:text-sm font-medium text-zinc-300 transition-colors hover:bg-white/10 hover:text-zinc-200 w-full sm:w-auto min-h-[2.5rem]"
               >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
                 </svg>
                 生成に戻る
@@ -104,9 +104,9 @@ export default function GeneratedPage() {
         </div>
       </header>
 
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+      <div className="mx-auto max-w-7xl px-3 sm:px-6 lg:px-8 py-4 sm:py-8">
         {loading ? (
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div className="grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {[...Array(8)].map((_, i) => (
               <div key={i} className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02]">
                 <div className="aspect-square animate-pulse bg-white/5" />
@@ -136,7 +136,7 @@ export default function GeneratedPage() {
             </Link>
           </div>
         ) : (
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div className="grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {files.map((f) => (
               <div
                 key={f.path}

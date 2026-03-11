@@ -244,6 +244,8 @@ export async function POST(request: NextRequest) {
               image_urls: "画像URL",
               image: "画像",
               input_image: "入力画像",
+              audio_url: "音声URL",
+              video_urls: "動画URL",
             };
             return `${names[fieldName] ?? fieldName}は必須です`;
           }

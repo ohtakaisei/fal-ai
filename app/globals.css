@@ -18,8 +18,17 @@ body {
   background: #0c0c0f;
   color: #f4f4f5;
   min-height: 100vh;
+  min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* モバイルのセーフエリア（ノッチ対応） */
+.safe-area-inset-top {
+  padding-top: env(safe-area-inset-top, 0);
+}
+.safe-area-inset-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0);
 }
 
 /* スクロールバー */
