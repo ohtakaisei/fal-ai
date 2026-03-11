@@ -79,10 +79,6 @@ export default function Home() {
   } | null>(null);
   const [modelPrice, setModelPrice] = useState<{ unit_price: number; unit: string } | null>(null);
   const [totalUsage, setTotalUsage] = useState<{ totalCost: number; currency: string } | null>(null);
-  const [saveDir, setSaveDir] = useState(() => {
-    if (typeof window === "undefined") return "generated";
-    return localStorage.getItem("fal_save_dir") || "generated";
-  });
   const [falKey, setFalKey] = useState("");
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -136,12 +132,40 @@ export default function Home() {
       .catch(() => {});
   }, [result, falKey]);
 
-  // 保存フォルダを localStorage に永続化
-  useEffect(() => {
-    if (typeof window !== "undefined" && saveDir) {
-      localStorage.setItem("fal_save_dir", saveDir);
+  // 名前を付けて保存（保存先をユーザーが選択）
+  const handleSaveAs = async (url: string) => {
+    const ext = url.includes(".mp4") ? "mp4" : url.includes(".mp3") || url.includes(".wav") ? "mp3" : "png";
+    const suggestedName = `fal-generated-${Date.now()}.${ext}`;
+    const accept = ext === "mp4"
+      ? { "video/mp4": [".mp4"] }
+      : ext === "mp3"
+      ? { "audio/mpeg": [".mp3"] }
+      : { "image/png": [".png"], "image/jpeg": [".jpg"], "image/webp": [".webp"] };
+
+    try {
+      const proxyUrl = `/api/proxy-download?url=${encodeURIComponent(url)}`;
+      const res = await fetch(proxyUrl);
+      if (!res.ok) throw new Error("取得に失敗しました");
+      const blob = await res.blob();
+
+      if ("showSaveFilePicker" in window) {
+        const handle = await (window as Window & { showSaveFilePicker: (opts: object) => Promise<FileSystemFileHandle> })
+          .showSaveFilePicker({ suggestedName, types: [{ description: "", accept }] });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+      } else {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = suggestedName;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+    } catch (e) {
+      if ((e as Error).name === "AbortError") return;
+      alert((e as Error).message || "保存に失敗しました");
     }
-  }, [saveDir]);
+  };
 
   // 選択したモデルの料金（models-with-pricing で取得済みの場合はAPI呼び出し不要）
   useEffect(() => {
@@ -262,7 +286,6 @@ export default function Home() {
         body: JSON.stringify({
           endpointId: selectedModel.endpoint_id,
           input,
-          saveDir: saveDir || undefined,
         }),
       });
       const data = await res.json();
@@ -297,14 +320,16 @@ export default function Home() {
                   fal.ai モデルエクスプローラー
                 </span>
               </h1>
-              <nav className="hidden sm:flex items-center gap-1">
-                <a
-                  href="/generated"
-                  className="rounded-md px-3 py-2 text-sm text-zinc-400 hover:bg-white/5 hover:text-zinc-200 transition-colors"
-                >
-                  生成ファイル一覧
-                </a>
-              </nav>
+              {mounted && typeof window !== "undefined" && window.location.hostname === "localhost" && (
+                <nav className="hidden sm:flex items-center gap-1">
+                  <a
+                    href="/generated"
+                    className="rounded-md px-3 py-2 text-sm text-zinc-400 hover:bg-white/5 hover:text-zinc-200 transition-colors"
+                  >
+                    生成ファイル一覧
+                  </a>
+                </nav>
+              )}
             </div>
             <div className="flex items-center gap-3">
               {mounted && falKey ? (
@@ -547,22 +572,6 @@ export default function Home() {
 
                   <div>
                     <label className="mb-2 block text-sm font-medium text-zinc-300">
-                      保存フォルダ
-                    </label>
-                    <input
-                      type="text"
-                      value={saveDir}
-                      onChange={(e) => setSaveDir(e.target.value)}
-                      placeholder="generated（プロジェクト内の相対パス）"
-                      className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 transition-colors focus:border-violet-500/50 focus:bg-white/[0.07] focus:outline-none focus:ring-2 focus:ring-violet-500/20"
-                    />
-                    <p className="mt-1 text-xs text-zinc-500">
-                      プロジェクトルートからの相対パス（例: generated, output/images）
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-zinc-300">
                       プロンプト
                     </label>
                     <textarea
@@ -677,20 +686,13 @@ export default function Home() {
                       <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                       </svg>
-                      <span className="font-medium">生成完了！{saveDir || "generated"}/ フォルダに保存されました</span>
+                      <span className="font-medium">生成完了！「名前を付けて保存」で保存先を選択できます</span>
                     </div>
                     {result.estimatedCost != null && (
                       <p className="text-sm text-amber-400">
                         今回の推定料金: 約 ${result.estimatedCost.toFixed(4)} USD
                       </p>
                     )}
-                    {result.savedFiles?.length ? (
-                      <ul className="space-y-1 text-xs text-zinc-500">
-                        {result.savedFiles.map((f) => (
-                          <li key={f} className="truncate">{f}</li>
-                        ))}
-                      </ul>
-                    ) : null}
                     {result.url && (
                       <div className="space-y-3">
                         <div className="overflow-hidden rounded-xl border border-white/10">
@@ -704,51 +706,29 @@ export default function Home() {
                             <img src={result.url} alt="生成結果" className="w-full" />
                           )}
                         </div>
-                        {result.savedFiles?.length ? (
-                          <div className="flex flex-wrap gap-2">
-                            {result.savedFiles.map((f) => {
-                              const apiPath = f.split("/").map(encodeURIComponent).join("/");
-                              return (
-                                <a
-                                  key={f}
-                                  href={`/api/generated/${apiPath}?download=1`}
-                                  download={f.split("/").pop()}
-                                  title={f.split("/").pop()}
-                                  className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:bg-white/15"
-                                >
-                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                                  </svg>
-                                  ダウンロード
-                                </a>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <a
-                            href={result.url}
-                            download
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:bg-white/15"
-                          >
-                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                            </svg>
-                            ダウンロード
-                          </a>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleSaveAs(result.url)}
+                          className="inline-flex items-center gap-2 rounded-lg bg-violet-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-violet-500/25 transition-colors hover:bg-violet-400"
+                        >
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                          名前を付けて保存
+                        </button>
                       </div>
                     )}
-                    <a
-                      href="/generated"
-                      className="inline-flex items-center gap-2 text-sm font-medium text-violet-400 transition-colors hover:text-violet-300"
-                    >
-                      生成ファイル一覧を見る
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                      </svg>
-                    </a>
+                    {mounted && typeof window !== "undefined" && window.location.hostname === "localhost" && (
+                      <a
+                        href="/generated"
+                        className="inline-flex items-center gap-2 text-sm font-medium text-violet-400 transition-colors hover:text-violet-300"
+                      >
+                        生成ファイル一覧を見る（ローカルのみ）
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </a>
+                    )}
                   </div>
                 )}
                 </div>
