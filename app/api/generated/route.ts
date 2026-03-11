@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
+export const dynamic = "force-dynamic";
+
 function getGeneratedDir(dirParam?: string | null): string {
   const dir = (dirParam || "generated").trim() || "generated";
   const resolved = path.resolve(process.cwd(), dir);

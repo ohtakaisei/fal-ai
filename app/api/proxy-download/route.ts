@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 /**
  * fal.ai のURLをプロキシしてダウンロード用に返す（CORS回避）
  * url パラメータは fal.media ドメインのみ許可

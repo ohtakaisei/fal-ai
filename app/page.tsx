@@ -708,7 +708,7 @@ export default function Home() {
                         </div>
                         <button
                           type="button"
-                          onClick={() => handleSaveAs(result.url)}
+                          onClick={() => { if (result.url) handleSaveAs(result.url); }}
                           className="inline-flex items-center gap-2 rounded-lg bg-violet-500 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-violet-500/25 transition-colors hover:bg-violet-400"
                         >
                           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
