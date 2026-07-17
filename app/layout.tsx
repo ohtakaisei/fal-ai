@@ -9,7 +9,7 @@ const notoSansJP = Noto_Sans_JP({
 });
 
 export const metadata: Metadata = {
-  title: "fal.ai モデルエクスプローラー",
+  title: "fal.ai Studio",
   description: "fal.aiの全AIモデルを自由に選択して画像・動画・音声・文字を生成",
   icons: {
     icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%237c3aed' rx='6'/><text x='16' y='22' font-size='18' text-anchor='middle' fill='white'>f</text></svg>",
