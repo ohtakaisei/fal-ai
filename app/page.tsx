@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { CATEGORY_LABELS, needsAudioInput, needsVideoInput } from "@/lib/categories";
+import AppHeader from "@/components/AppHeader";
+import ParamsForm from "@/components/ParamsForm";
+import { computeBillingUnits, HANDLED_KEYS, type SchemaField } from "@/lib/schema";
 
 interface FalModel {
   endpoint_id: string;
@@ -85,26 +88,26 @@ export default function Home() {
     estimatedCost?: number;
   } | null>(null);
   const [modelPrice, setModelPrice] = useState<{ unit_price: number; unit: string } | null>(null);
-  const [totalUsage, setTotalUsage] = useState<{ totalCost: number; currency: string } | null>(null);
   const [falKey, setFalKey] = useState("");
-  const [showKeyInput, setShowKeyInput] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [quantity, setQuantity] = useState(1);
+  const [estimate, setEstimate] = useState<{ cost: number; method: string } | null>(null);
+  const [estimating, setEstimating] = useState(false);
+  const [schemaFields, setSchemaFields] = useState<SchemaField[]>([]);
+  const [schemaLoading, setSchemaLoading] = useState(false);
+  const [params, setParams] = useState<Record<string, unknown>>({});
 
   useEffect(() => {
     setFalKey(localStorage.getItem("fal_api_key") || "");
     setMounted(true);
+    // 共通ヘッダーでキーが変更されたら反映
+    const onKey = (e: Event) => setFalKey((e as CustomEvent<string>).detail || "");
+    window.addEventListener("fal-key-changed", onKey);
+    return () => window.removeEventListener("fal-key-changed", onKey);
   }, []);
 
   const falHeaders = (): Record<string, string> =>
     falKey ? { "X-FAL-Key": falKey } : {};
-
-  const saveFalKey = (key: string) => {
-    setFalKey(key);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("fal_api_key", key);
-    }
-    setShowKeyInput(false);
-  };
 
   // モデル一覧: 段階的ロード（先に一覧表示→料金は後から）＋キャッシュ
   useEffect(() => {
@@ -190,18 +193,82 @@ export default function Home() {
       });
   }, [falKey, mounted]);
 
-  // 累計使用量を取得（生成後に再取得）
+  // 入力スキーマを取得（モデル選択時）→ 動的フォームを構築
   useEffect(() => {
-    if (!falKey) return;
-    fetch("/api/usage", { headers: falHeaders() })
+    setSchemaFields([]);
+    setParams({});
+    if (!selectedModel) return;
+    setSchemaLoading(true);
+    fetch(`/api/schema?endpoint_id=${encodeURIComponent(selectedModel.endpoint_id)}`, {
+      headers: falHeaders(),
+    })
       .then((res) => res.json())
       .then((data) => {
-        if (!data.error && data.totalCost != null) {
-          setTotalUsage({ totalCost: data.totalCost, currency: data.currency || "USD" });
+        const fields = ((data.fields || []) as SchemaField[]).filter(
+          (f) => !HANDLED_KEYS.has(f.name)
+        );
+        setSchemaFields(fields);
+        // デフォルト値をフォームの初期値に反映
+        const init: Record<string, unknown> = {};
+        for (const f of fields) {
+          if (f.default !== undefined) init[f.name] = f.default;
         }
+        setParams(init);
       })
-      .catch(() => {});
-  }, [result, falKey]);
+      .catch(() => setSchemaFields([]))
+      .finally(() => setSchemaLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedModel]);
+
+  // 設定値から課金単位数を計算（枚数・秒数・解像度を反映）
+  const durationDefault = (() => {
+    const f = schemaFields.find((x) =>
+      ["duration", "video_duration", "duration_seconds", "num_seconds"].includes(x.name)
+    );
+    const d = f?.default;
+    const n = typeof d === "number" ? d : parseFloat(String(d ?? ""));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  })();
+  const billing = computeBillingUnits(
+    modelPrice?.unit,
+    {
+      ...params,
+      ...(schemaFields.some((f) => f.name === "num_images") ? {} : { num_images: quantity }),
+    },
+    durationDefault
+  );
+
+  // 生成前のコスト見積もり（モデル・設定が変わったら再取得）
+  const billingUnits = billing.units;
+  useEffect(() => {
+    setEstimate(null);
+    if (!selectedModel || !falKey) return;
+    setEstimating(true);
+    const timer = setTimeout(() => {
+      fetch("/api/estimate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...falHeaders() },
+        body: JSON.stringify({ endpoint_id: selectedModel.endpoint_id, quantity: billingUnits }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.totalCost != null) {
+            setEstimate({ cost: data.totalCost, method: data.method });
+          }
+        })
+        .catch(() => {})
+        .finally(() => setEstimating(false));
+    }, 400);
+    return () => {
+      clearTimeout(timer);
+      setEstimating(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedModel, billingUnits, falKey]);
+
+  // 見積もりAPIが使えない場合のフォールバック（単価 × 課金単位数）
+  const estimatedCostDisplay =
+    estimate?.cost ?? (modelPrice ? modelPrice.unit_price * billingUnits : null);
 
   // 名前を付けて保存（保存先をユーザーが選択）
   const handleSaveAs = async (url: string) => {
@@ -238,17 +305,18 @@ export default function Home() {
     }
   };
 
-  // 選択したモデルの料金（models-with-pricing で取得済みの場合はAPI呼び出し不要）
+  // 選択したモデルの料金（課金単位 second/image 等が必要なため常にAPIで取得）
   useEffect(() => {
     if (!selectedModel) {
       setModelPrice(null);
       return;
     }
-    if (selectedModel.unit_price != null) {
-      setModelPrice({ unit_price: selectedModel.unit_price, unit: "回" });
-      return;
-    }
-    setModelPrice(null);
+    // キャッシュ済み単価を仮表示しつつ、正確な単位を取得
+    setModelPrice(
+      selectedModel.unit_price != null
+        ? { unit_price: selectedModel.unit_price, unit: "回" }
+        : null
+    );
     fetch(`/api/pricing?endpoint_id=${encodeURIComponent(selectedModel.endpoint_id)}`, {
       headers: falHeaders(),
     })
@@ -260,6 +328,7 @@ export default function Home() {
         }
       })
       .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedModel]);
 
   const filteredModels = models.filter((m) => {
@@ -382,8 +451,16 @@ export default function Home() {
     }
 
     const input: Record<string, unknown> = { prompt };
+    // 動的フォームの設定値をマージ（未指定は送らない）
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== "") input[k] = v;
+    }
     if (finalImageUrl) input.image_url = finalImageUrl;
     if (finalAudioUrl) input.audio_url = finalAudioUrl;
+    // スキーマに num_images がない画像モデルは簡易枚数指定を使用
+    if (quantity > 1 && isImageModel && !schemaFields.some((f) => f.name === "num_images")) {
+      input.num_images = quantity;
+    }
     const videoUrls = videoUrlsText
       .split(/[\n,]+/)
       .map((s) => s.trim())
@@ -408,6 +485,14 @@ export default function Home() {
         result: data.result,
         estimatedCost: data.estimatedCost,
       });
+
+      // 履歴ページ用に使用モデルを記録 & ヘッダーの残高/累計を更新
+      try {
+        const used: string[] = JSON.parse(localStorage.getItem("fal_used_endpoints") || "[]");
+        const next = [selectedModel.endpoint_id, ...used.filter((id) => id !== selectedModel.endpoint_id)].slice(0, 50);
+        localStorage.setItem("fal_used_endpoints", JSON.stringify(next));
+      } catch {}
+      window.dispatchEvent(new Event("fal-generated"));
     } catch (e) {
       setResult({
         error: e instanceof Error ? e.message : "エラーが発生しました",
@@ -420,6 +505,7 @@ export default function Home() {
   const needsImage = needsImageInput(selectedModel?.metadata?.category);
   const needsAudio = needsAudioInput(selectedModel?.metadata?.category, selectedModel?.endpoint_id);
   const needsVideo = needsVideoInput(selectedModel?.metadata?.category, selectedModel?.endpoint_id);
+  const isImageModel = getCategoryType(selectedModel?.metadata?.category || "") === "画像";
 
   const hasRequiredAudio = !needsAudio || !!audioUrl || !!audioFile;
   const hasRequiredVideo = !needsVideo || videoUrlsText.trim().split(/[\n,]+/).some((s) => s.trim().length > 0);
@@ -428,103 +514,9 @@ export default function Home() {
 
   return (
     <main className="min-h-screen">
-      {/* ヘッダー */}
-      <header className="sticky top-0 z-50 border-b border-white/5 bg-[#0c0c0f]/95 backdrop-blur-md safe-area-inset-top">
-        <div className="mx-auto max-w-7xl px-3 sm:px-6 lg:px-8">
-          <div className="flex h-14 sm:h-16 min-h-[3.5rem] items-center justify-between gap-2 flex-wrap">
-            <h1 className="text-base sm:text-lg font-semibold tracking-tight shrink-0 min-w-0">
-              <span className="bg-gradient-to-r from-violet-400 via-fuchsia-400 to-violet-400 bg-clip-text text-transparent truncate block">
-                fal.ai モデルエクスプローラー
-              </span>
-            </h1>
-            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-              {mounted && falKey ? (
-                <button
-                  type="button"
-                  onClick={() => setShowKeyInput(true)}
-                  className="rounded-full bg-white/5 px-3 py-2 sm:px-4 text-xs sm:text-sm text-zinc-400 hover:bg-white/10 hover:text-zinc-200 min-h-[2.5rem]"
-                  title="APIキーを変更"
-                >
-                  <span className="hidden sm:inline">🔑 キー設定済み</span>
-                  <span className="sm:hidden">🔑</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setShowKeyInput(true)}
-                  className="rounded-full bg-amber-500/20 px-3 py-2 sm:px-4 text-xs sm:text-sm font-medium text-amber-400 hover:bg-amber-500/30 min-h-[2.5rem] whitespace-nowrap"
-                >
-                  <span className="hidden sm:inline">fal.ai APIキーを設定</span>
-                  <span className="sm:hidden">APIキー</span>
-                </button>
-              )}
-              {totalUsage != null && (
-                <div className="hidden sm:flex items-center gap-2 rounded-full bg-white/5 px-3 py-2 text-xs sm:text-sm">
-                  <span className="text-zinc-500">累計</span>
-                  <span className="font-medium text-amber-400">
-                    ${totalUsage.totalCost.toFixed(4)}
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* APIキー入力モーダル */}
-      {showKeyInput && (
-        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4">
-          <div className="mx-0 sm:mx-4 w-full max-w-md rounded-t-2xl sm:rounded-2xl border border-white/10 bg-[#0c0c0f] p-4 sm:p-6 shadow-xl max-h-[90vh] overflow-y-auto safe-area-inset-bottom">
-            <h3 className="mb-4 text-lg font-semibold text-zinc-200">
-              fal.ai APIキー
-            </h3>
-            <p className="mb-4 text-sm text-zinc-400">
-              <a
-                href="https://fal.ai/dashboard/keys"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-violet-400 hover:underline"
-              >
-                fal.ai ダッシュボード
-              </a>
-              でキーを取得し、入力してください。キーはブラウザに保存され、fal.ai API呼び出し時にのみ使用されます。
-            </p>
-            <input
-              type="password"
-              placeholder="fal-xxxxxxxx..."
-              value={falKey}
-              onChange={(e) => setFalKey(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && saveFalKey(falKey)}
-              className="mb-4 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-zinc-100 placeholder-zinc-500 focus:border-violet-500/50 focus:outline-none"
-              autoFocus
-            />
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => saveFalKey(falKey)}
-                className="flex-1 rounded-xl bg-violet-500 py-3 font-medium text-white hover:bg-violet-400"
-              >
-                保存
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowKeyInput(false)}
-                className="rounded-xl bg-white/10 py-3 px-4 text-zinc-300 hover:bg-white/15"
-              >
-                キャンセル
-              </button>
-            </div>
-            <p className="mt-4 text-xs text-zinc-500">
-              デプロイ時に FAL_KEY を環境変数で設定している場合は、入力不要です。
-            </p>
-          </div>
-        </div>
-      )}
+      <AppHeader />
 
       <div className="mx-auto max-w-7xl px-3 sm:px-6 lg:px-8 py-4 sm:py-8 min-w-0 overflow-x-hidden">
-        <p className="mb-4 sm:mb-8 text-center text-xs sm:text-sm text-zinc-500 px-2">
-          fal.aiの全AIモデルを自由に選択して画像・動画・音声・文字を生成
-        </p>
         {error && (
           <div className="mb-6 flex items-center gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-300">
             <svg className="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -611,6 +603,7 @@ export default function Home() {
                         setAudioFile(null);
                         setAudioUrl("");
                         setVideoUrlsText("");
+                        setQuantity(1);
                       }}
                       className={`w-full min-w-0 text-left rounded-xl p-3 transition-all overflow-hidden ${
                         selectedModel?.endpoint_id === m.endpoint_id
@@ -628,26 +621,28 @@ export default function Home() {
                           {getCategoryType(m.metadata?.category || "")}
                         </span>
                         <div className="min-w-0 flex-1 overflow-hidden">
-                          <div className="truncate font-medium text-zinc-200 text-sm sm:text-base" title={m.metadata?.display_name || m.endpoint_id}>
-                            {m.metadata?.display_name || m.endpoint_id}
-                            {needsImageInput(m.metadata?.category) && (
-                              <span className="text-amber-400"> (画像参照)</span>
-                            )}
-                            {needsAudioInput(m.metadata?.category, m.endpoint_id) && (
-                              <span className="text-violet-400"> (音声参照)</span>
-                            )}
-                            {needsVideoInput(m.metadata?.category, m.endpoint_id) && (
-                              <span className="text-cyan-400"> (動画参照)</span>
+                          <div className="flex items-center justify-between gap-2 min-w-0">
+                            <span className="truncate font-medium text-zinc-200 text-sm sm:text-base" title={m.metadata?.display_name || m.endpoint_id}>
+                              {m.metadata?.display_name || m.endpoint_id}
+                            </span>
+                            {m.unit_price != null && (
+                              <span className="shrink-0 text-xs font-medium text-amber-400">
+                                ${m.unit_price.toFixed(m.unit_price < 0.01 ? 4 : 2)}
+                              </span>
                             )}
                           </div>
-                          <div className="mt-0.5 flex items-center gap-2 min-w-0">
+                          <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
                             <span className="truncate text-xs text-zinc-500" title={m.endpoint_id}>
                               {m.endpoint_id}
                             </span>
-                            {m.unit_price != null && (
-                              <span className="shrink-0 text-xs text-amber-400">
-                                ${m.unit_price.toFixed(4)}
-                              </span>
+                            {needsImageInput(m.metadata?.category) && (
+                              <span className="shrink-0 text-[10px] text-amber-400/80">画像参照</span>
+                            )}
+                            {needsAudioInput(m.metadata?.category, m.endpoint_id) && (
+                              <span className="shrink-0 text-[10px] text-violet-400/80">音声参照</span>
+                            )}
+                            {needsVideoInput(m.metadata?.category, m.endpoint_id) && (
+                              <span className="shrink-0 text-[10px] text-cyan-400/80">動画参照</span>
                             )}
                           </div>
                         </div>
@@ -665,6 +660,12 @@ export default function Home() {
               <div className="rounded-xl sm:rounded-2xl border border-white/10 bg-white/[0.02] p-4 sm:p-6 lg:p-8">
                 <div className="space-y-6">
                   <div>
+                    <h2 className="mb-1 text-lg sm:text-xl font-semibold text-zinc-100 break-words">
+                      {selectedModel.metadata?.display_name || selectedModel.endpoint_id}
+                    </h2>
+                    <p className="mb-3 truncate text-xs text-zinc-600" title={selectedModel.endpoint_id}>
+                      {selectedModel.endpoint_id}
+                    </p>
                     <div className="mb-2 flex flex-wrap items-center gap-2 min-w-0">
                       <span
                         className={`shrink-0 rounded-md px-2.5 py-1 text-xs font-medium ${
@@ -698,8 +699,8 @@ export default function Home() {
                       {selectedModel.metadata?.description}
                     </p>
                     {modelPrice && (
-                      <p className="mt-3 text-sm font-medium text-amber-400">
-                        約 ${modelPrice.unit_price.toFixed(4)} / {modelPrice.unit}
+                      <p className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-400">
+                        単価 約 ${modelPrice.unit_price.toFixed(4)} / {modelPrice.unit}
                       </p>
                     )}
                   </div>
@@ -842,6 +843,26 @@ export default function Home() {
                     </div>
                   )}
 
+                  {/* モデル固有の生成設定（スキーマから動的生成） */}
+                  {schemaLoading ? (
+                    <div className="space-y-2">
+                      <div className="h-4 w-24 animate-pulse rounded bg-white/5" />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {[...Array(4)].map((_, i) => (
+                          <div key={i} className="h-9 animate-pulse rounded-lg bg-white/5" />
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <ParamsForm
+                      fields={schemaFields}
+                      values={params}
+                      onChange={(name, value) =>
+                        setParams((prev) => ({ ...prev, [name]: value }))
+                      }
+                    />
+                  )}
+
                   {!canGenerate && (needsAudio || needsVideo || needsImage) && (
                     <p className="text-sm text-amber-400">
                       {[
@@ -853,6 +874,60 @@ export default function Home() {
                         .join(" / ")}
                     </p>
                   )}
+
+                  {/* 生成数とコスト見積もり */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                    {isImageModel && !schemaLoading && !schemaFields.some((f) => f.name === "num_images") ? (
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-medium text-zinc-300">生成枚数</span>
+                        <div className="flex items-center gap-1 rounded-lg bg-white/5 p-1">
+                          {[1, 2, 3, 4].map((n) => (
+                            <button
+                              key={n}
+                              type="button"
+                              onClick={() => setQuantity(n)}
+                              className={`h-8 w-8 rounded-md text-sm font-medium transition-colors ${
+                                quantity === n
+                                  ? "bg-violet-500 text-white"
+                                  : "text-zinc-400 hover:bg-white/10 hover:text-zinc-200"
+                              }`}
+                            >
+                              {n}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-zinc-500">
+                        推定コスト
+                        {modelPrice && billing.note && (
+                          <p className="text-[11px] text-zinc-600">
+                            {billing.note} × ${modelPrice.unit_price.toFixed(4)}/{modelPrice.unit}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <div className="text-right">
+                      {estimating ? (
+                        <span className="text-sm text-zinc-500">見積もり中...</span>
+                      ) : estimatedCostDisplay != null ? (
+                        <div>
+                          <span className="text-base font-semibold text-amber-400">
+                            約 ${estimatedCostDisplay.toFixed(4)}
+                          </span>
+                          <span className="ml-1 text-xs text-zinc-500">USD</span>
+                          {estimate?.method === "historical" && (
+                            <p className="text-[10px] text-zinc-600">過去の使用実績ベース</p>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-sm text-zinc-600" title="このモデルの料金情報が取得できませんでした">
+                          料金情報なし
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
                   <button
                     onClick={handleGenerate}
                     disabled={generating || uploading || !canGenerate}
@@ -880,6 +955,11 @@ export default function Home() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                         </svg>
                         生成する
+                        {estimatedCostDisplay != null && (
+                          <span className="text-sm font-normal text-white/80">
+                            （約 ${estimatedCostDisplay.toFixed(4)}）
+                          </span>
+                        )}
                       </>
                     )}
                   </button>
@@ -930,17 +1010,28 @@ export default function Home() {
                         </button>
                       </div>
                     )}
-                    {mounted && typeof window !== "undefined" && window.location.hostname === "localhost" && (
+                    <div className="flex flex-wrap gap-4">
                       <a
-                        href="/generated"
+                        href="/history"
                         className="inline-flex items-center gap-2 text-sm font-medium text-violet-400 transition-colors hover:text-violet-300"
                       >
-                        生成ファイル一覧を見る（ローカルのみ）
+                        生成履歴を見る
                         <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                         </svg>
                       </a>
-                    )}
+                      {mounted && typeof window !== "undefined" && window.location.hostname === "localhost" && (
+                        <a
+                          href="/generated"
+                          className="inline-flex items-center gap-2 text-sm font-medium text-violet-400 transition-colors hover:text-violet-300"
+                        >
+                          保存ファイル一覧（ローカルのみ）
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                        </a>
+                      )}
+                    </div>
                   </div>
                 )}
                 </div>
@@ -952,7 +1043,7 @@ export default function Home() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                   </svg>
                 </div>
-                <p className="text-zinc-500">下のリストからモデルを選択してください</p>
+                <p className="text-zinc-500">モデル一覧からモデルを選択してください</p>
                 <p className="mt-1 text-sm text-zinc-600">画像・動画・音声・文字を生成できます</p>
               </div>
             )}
